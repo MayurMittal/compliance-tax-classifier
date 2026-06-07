@@ -1,5 +1,6 @@
 import streamlit as st
 from classifier import classify, fetch_text
+from agent import research_compliance
 
 LABEL_COLORS = {
     "VAT": "#4A90D9",
@@ -108,3 +109,54 @@ if content:
             )
 
     st.info(f"**Summary:** {result['summary']}")
+
+    # ── Research section ────────────────────────────────────────────────────
+    if primary != "NOT_TAX_RELATED":
+        jurisdiction = result["jurisdiction"]
+        with st.spinner("Researching compliance rules from official sources..."):
+            try:
+                research = research_compliance(primary, jurisdiction)
+            except Exception as exc:
+                research = {"error": str(exc)}
+
+        with st.expander("📋 Relevant Rules & Recent Changes", expanded=True):
+            if research.get("error"):
+                st.error(f"Research failed: {research['error']}")
+
+            elif research.get("no_sources"):
+                if research.get("fetch_failed"):
+                    st.warning("Sources are configured but could not be fetched. Check your internet connection or update the URLs in `sources_config.json`.")
+                else:
+                    st.info(
+                        "No curated sources configured for this jurisdiction yet. "
+                        "You can add them in `sources_config.json`"
+                    )
+
+            else:
+                if research.get("current_rates"):
+                    st.markdown("**Current Rates**")
+                    st.markdown(research["current_rates"])
+
+                if research.get("recent_changes"):
+                    st.markdown("**Recent Changes (last 90 days)**")
+                    for item in research["recent_changes"]:
+                        st.markdown(f"- {item}")
+
+                if research.get("key_deadlines"):
+                    st.markdown("**Key Compliance Deadlines**")
+                    for item in research["key_deadlines"]:
+                        st.markdown(f"- {item}")
+
+                if research.get("penalties"):
+                    st.markdown("**Penalties**")
+                    for item in research["penalties"]:
+                        st.markdown(f"- {item}")
+
+                if research.get("summary"):
+                    st.caption(research["summary"])
+
+                if research.get("sources_used"):
+                    st.markdown("---")
+                    st.markdown("**Sources**")
+                    for url in research["sources_used"]:
+                        st.markdown(f"- [{url}]({url})")

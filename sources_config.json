@@ -1,0 +1,38 @@
+{
+  "GST": {
+    "India": [
+      "https://www.gst.gov.in/",
+      "https://cbic-gst.gov.in/gst-goods-services-rates.html"
+    ]
+  },
+  "VAT": {
+    "European Union": [
+      "https://taxation-customs.ec.europa.eu/taxation/vat_en"
+    ],
+    "United Kingdom": [
+      "https://www.gov.uk/vat-rates",
+      "https://www.gov.uk/guidance/vat-registration-thresholds"
+    ]
+  },
+  "SALES_TAX": {
+    "United States": [
+      "https://www.irs.gov/businesses/small-businesses-self-employed/sales-tax"
+    ]
+  },
+  "INCOME_TAX": {
+    "India": [
+      "https://www.incometax.gov.in/iec/foportal/",
+      "https://incometaxindia.gov.in/Pages/tax-rates.aspx"
+    ],
+    "United States": [
+      "https://www.irs.gov/businesses/small-businesses-self-employed/business-taxes",
+      "https://www.irs.gov/newsroom/irs-provides-tax-inflation-adjustments-for-tax-year-2025"
+    ]
+  },
+  "COMPLIANCE_NOTICE": {
+    "India": [
+      "https://www.incometax.gov.in/iec/foportal/help/individual/notices",
+      "https://www.gst.gov.in/"
+    ]
+  }
+}
