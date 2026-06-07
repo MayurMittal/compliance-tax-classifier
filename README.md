@@ -198,6 +198,12 @@ pip install -r requirements.txt
 | Python language Wikipedia page | `NOT_TAX_RELATED` | — | high |
 
 ---
+## Application Screenshots
+<img width="1577" height="839" alt="image" src="https://github.com/user-attachments/assets/6d5da962-4529-48dc-b15e-09381b25bcc7" />
+<img width="1513" height="1027" alt="image" src="https://github.com/user-attachments/assets/3f20e1c3-f85f-454e-b02b-b4dd31ec811b" />
+
+
+
 
 ## License
 
