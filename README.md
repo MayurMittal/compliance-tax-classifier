@@ -1,9 +1,9 @@
 # Tax & Compliance Classifier
 
-An AI-powered tool that reads any webpage, text, or file and does two things automatically:
+An AI-powered tool with three capabilities available across two tabs:
 
-1. **Classifies** the content across 13 tax/compliance categories with jurisdiction detection and confidence scoring
-2. **Researches** the relevant rules, recent changes, deadlines, and penalties by fetching live data from curated official sources
+1. **Classify Content** — reads any URL, text, or file and classifies it across 13 tax/compliance categories with jurisdiction detection and confidence scoring, then automatically pulls relevant rules from curated sources
+2. **Research Topic** — accepts a free-form tax topic and jurisdiction, autonomously generates search queries, fetches official sources via the web, and synthesises a structured multi-document report
 
 Built with [Claude Sonnet 4.6](https://www.anthropic.com/claude) and [Streamlit](https://streamlit.io/).
 
@@ -39,6 +39,23 @@ Immediately after classification, the app automatically:
 
 If no sources are configured for a given tax type or jurisdiction, a friendly message prompts you to add them in `sources_config.json`.
 
+### Research Topic (Tab 2) — Multi-Document Sourcing Agent
+
+A free-form research tool. You provide a tax topic (e.g. "GST rate changes") and a jurisdiction:
+
+1. **Query generation** — Claude generates 3–5 targeted search queries for the topic
+2. **Web search** — each query is run via Anthropic's `web_search_20250305` server-side tool to collect result URLs
+3. **Content fetching** — each URL is fetched and cleaned with `httpx` + `BeautifulSoup`
+4. **Synthesis** — all documents are sent to Claude Sonnet 4.6, which returns a structured report with:
+   - **Key findings** — main facts and rules across all sources
+   - **Recent changes** — rule updates from the last 90 days (only where explicitly mentioned)
+   - **Current rates or rules** — specific percentages and thresholds
+   - **Important deadlines** — filing dates and registration thresholds
+   - **Conflicting information** — contradictions across sources, if any
+   - **Sources used** — clickable links to every source consulted
+
+If web search returns no results, the agent automatically falls back to the curated URLs in `sources_config.json` for that jurisdiction.
+
 ---
 
 ## Supported Tax & Compliance Categories
@@ -66,8 +83,9 @@ If no sources are configured for a given tax type or jurisdiction, a friendly me
 ```
 compliance-tax-classifier/
 ├── classifier.py        # Core classification logic + CLI
-├── agent.py             # Compliance research agent
-├── app.py               # Streamlit web UI
+├── agent.py             # Compliance research agent (curated sources)
+├── sourcing_agent.py    # Multi-document sourcing agent (web search + synthesis)
+├── app.py               # Streamlit web UI (two tabs)
 ├── sources_config.json  # Trusted source URLs by tax type and jurisdiction
 ├── requirements.txt     # Python dependencies
 └── .env                 # API key (not committed — see setup)
@@ -118,6 +136,51 @@ Input (URL / pasted text / uploaded file)
               ▼
     Streamlit UI — Classification badge
                  + Expandable research panel
+```
+
+---
+
+## Architecture — Research Topic Flow
+
+```
+User inputs: topic + jurisdiction
+              │
+              ▼
+    ┌─────────────────────────────────┐
+    │   Query Generation              │
+    │   Claude Sonnet 4.6             │
+    │   → 3–5 targeted search queries │
+    └─────────────────────────────────┘
+              │
+              ▼
+    ┌─────────────────────────────────┐
+    │   Web Search (agentic loop)     │
+    │   Anthropic web_search tool     │
+    │   → collect result URLs         │
+    └─────────────────────────────────┘
+              │  (fallback: sources_config.json)
+              ▼
+    ┌─────────────────────────────────┐
+    │   Content Fetcher               │
+    │   httpx GET → BeautifulSoup     │
+    │   → clean text per URL          │
+    └─────────────────────────────────┘
+              │
+              ▼
+    ┌─────────────────────────────────┐
+    │   Multi-Document Synthesis      │
+    │   Claude Sonnet 4.6             │
+    │   Structured JSON output        │
+    │   → key_findings                │
+    │   → recent_changes (90 days)    │
+    │   → current_rates_or_rules      │
+    │   → important_deadlines         │
+    │   → conflicting_information     │
+    └─────────────────────────────────┘
+              │
+              ▼
+    Streamlit UI — Research report
+                 + Clickable source links
 ```
 
 ---
@@ -211,9 +274,17 @@ The UI offers three input modes:
 | **Web page URL** | Enter a URL — the app fetches and parses the page automatically |
 | **Upload file** | Upload a `.txt` or `.html` file from your computer |
 
-Click **Classify** to run both the classification and the research agent. Results appear in two sections:
+The app has two tabs:
+
+**Tab 1 — Classify Content**
+
+Choose an input mode (paste text / URL / upload file) and click **Classify**. Results appear in two sections:
 - A color-coded classification badge with confidence and jurisdiction
-- An expandable **"Relevant Rules & Recent Changes"** panel with live data from official sources
+- An expandable **"Relevant Rules & Recent Changes"** panel from curated official sources
+
+**Tab 2 — Research Topic**
+
+Enter a free-form tax topic and select a jurisdiction from the dropdown, then click **Research**. The agent searches the web, fetches sources, and displays a structured report with key findings, recent changes, rates, deadlines, and conflicting information across sources.
 
 ---
 
