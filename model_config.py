@@ -169,18 +169,21 @@ def _gemini_completion(
     schema: dict | None,
     max_tokens: int,
 ) -> str:
-    import google.generativeai as genai
-    genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+    from google import genai
+    from google.genai import types
 
-    gen_config: dict = {"max_output_tokens": max_tokens}
+    client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+
+    config_kwargs: dict = {"max_output_tokens": max_tokens}
+    if system_prompt:
+        config_kwargs["system_instruction"] = system_prompt
     if schema:
-        gen_config["response_mime_type"] = "application/json"
-        gen_config["response_schema"] = _to_gemini_schema(schema)
+        config_kwargs["response_mime_type"] = "application/json"
+        config_kwargs["response_schema"] = _to_gemini_schema(schema)
 
-    model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        system_instruction=system_prompt if system_prompt else None,
-        generation_config=gen_config,
+    response = client.models.generate_content(
+        model="gemini-1.5-flash",
+        contents=prompt,
+        config=types.GenerateContentConfig(**config_kwargs),
     )
-    response = model.generate_content(prompt)
     return response.text
