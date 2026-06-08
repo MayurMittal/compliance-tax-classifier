@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from anthropic import Anthropic
+from model_config import get_completion
 from classifier import fetch_text
 
 SOURCES_CONFIG_PATH = Path(__file__).parent / "sources_config.json"
@@ -82,7 +82,6 @@ def research_compliance(primary_label: str, jurisdiction: str) -> dict:
 
     combined_content = "\n\n".join(fetched_chunks)
 
-    client = Anthropic()
     user_message = f"""\
 Analyze the following content from official sources about {primary_label.replace("_", " ")} in {jurisdiction}.
 
@@ -90,24 +89,13 @@ Extract current rates, recent rule changes (last 90 days), key compliance deadli
 
 {combined_content}
 """
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
+    result_text = get_completion(
+        user_message,
+        system_prompt=RESEARCH_SYSTEM_PROMPT,
+        schema=RESEARCH_SCHEMA,
         max_tokens=2048,
-        system=RESEARCH_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-        output_config={
-            "effort": "high",
-            "format": {
-                "type": "json_schema",
-                "schema": RESEARCH_SCHEMA,
-            },
-        },
+        effort="high",
     )
-
-    for block in response.content:
-        if block.type == "text":
-            result = json.loads(block.text)
-            result["sources_used"] = sources_used
-            return result
-
-    raise RuntimeError("No text block in response")
+    result = json.loads(result_text)
+    result["sources_used"] = sources_used
+    return result

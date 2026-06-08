@@ -1,12 +1,8 @@
-import os
 import sys
 import json
 import httpx
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
-from anthropic import Anthropic
-
-load_dotenv()
+from model_config import get_completion
 
 TAXONOMY = [
     "VAT",
@@ -82,7 +78,6 @@ def fetch_text(url: str, max_chars: int = 10_000) -> str:
 
 
 def classify(content: str) -> dict:
-    client = Anthropic()
     taxonomy_list = "\n".join(f"  - {t}" for t in TAXONOMY)
     user_message = f"""\
 Classify the following content using this taxonomy:
@@ -92,23 +87,14 @@ Classify the following content using this taxonomy:
 {content}
 --- CONTENT END ---\
 """
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
+    result_text = get_completion(
+        user_message,
+        system_prompt=SYSTEM_PROMPT,
+        schema=OUTPUT_SCHEMA,
         max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-        output_config={
-            "effort": "high",
-            "format": {
-                "type": "json_schema",
-                "schema": OUTPUT_SCHEMA,
-            },
-        },
+        effort="high",
     )
-    for block in response.content:
-        if block.type == "text":
-            return json.loads(block.text)
-    raise RuntimeError("No text block found in response")
+    return json.loads(result_text)
 
 
 def print_result(result: dict) -> None:

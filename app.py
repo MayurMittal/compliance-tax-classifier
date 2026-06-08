@@ -1,4 +1,5 @@
 import streamlit as st
+import model_config
 from classifier import classify, fetch_text
 from agent import research_compliance
 from sourcing_agent import research_topic, get_all_tax_types
@@ -22,6 +23,38 @@ LABEL_COLORS = {
 CONFIDENCE_COLORS = {"high": "green", "medium": "orange", "low": "red"}
 
 st.set_page_config(page_title="Tax & Compliance Classifier", page_icon="🔍", layout="centered")
+
+# ── Sidebar: environment toggle ────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### Environment")
+
+    # Initialise session state from .env on first load
+    if "env_radio" not in st.session_state:
+        default = "Test (Gemini Flash)" if model_config.get_environment() == "test" else "Production (Claude Sonnet)"
+        st.session_state["env_radio"] = default
+
+    env_label = st.radio(
+        "Active model",
+        options=["Test (Gemini Flash)", "Production (Claude Sonnet)"],
+        key="env_radio",
+    )
+    active_env = "test" if "Test" in env_label else "prod"
+    model_config.set_environment(active_env)
+
+    if active_env == "test":
+        st.markdown(
+            "<div style='background:#28a745;color:white;padding:6px 12px;border-radius:6px;"
+            "font-weight:700;text-align:center;margin-top:8px'>TEST</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption("Gemini 1.5 Flash — lower cost, web search disabled")
+    else:
+        st.markdown(
+            "<div style='background:#1a6fcf;color:white;padding:6px 12px;border-radius:6px;"
+            "font-weight:700;text-align:center;margin-top:8px'>PRODUCTION</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption("Claude Sonnet 4.6 — full features including live web search")
 
 st.title("Tax & Compliance Classifier")
 
@@ -91,6 +124,7 @@ with tab_classify:
 
         st.divider()
         st.subheader("Classification Result")
+        st.caption(f"Classified by: {model_config.get_active_model_name()}")
 
         primary = result["primary_label"]
         color = LABEL_COLORS.get(primary, "#888")
@@ -233,7 +267,10 @@ with tab_research:
 
             st.divider()
             st.subheader(f"Research Report: {tax_type_input}")
-            st.caption(f"Jurisdiction: {jurisdiction_input}  |  Period: {time_period_input}")
+            st.caption(
+                f"Jurisdiction: {jurisdiction_input}  |  Period: {time_period_input}  |  "
+                f"Model: {model_config.get_active_model_name()}"
+            )
 
             if report.get("no_sources"):
                 st.info(report.get("summary", "No sources found or could not be fetched."))

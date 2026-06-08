@@ -1,7 +1,7 @@
 import re
 import json
 from pathlib import Path
-from anthropic import Anthropic
+from model_config import get_completion, search_web
 from classifier import fetch_text
 
 SOURCES_CONFIG_PATH = Path(__file__).parent / "sources_config.json"
@@ -86,7 +86,7 @@ def get_all_tax_types() -> list[str]:
 def _generate_queries(
     tax_type: str, jurisdiction: str, research_context: str, time_period: str
 ) -> list[str]:
-    """Ask Claude to produce exactly 2 highly specific search queries."""
+    """Ask the active model for exactly 2 highly specific search queries."""
     recency_hint = {
         "Last 7 days": "Queries must target very recent news. Include the current month and year (e.g. 'June 2026').",
         "Last 30 days": "Queries should target recent updates. Include '2026' in each query.",
@@ -94,105 +94,48 @@ def _generate_queries(
         "Any time": "",
     }.get(time_period, "")
 
-    client = Anthropic()
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=512,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Generate exactly 2 highly specific web search queries for this tax research task.\n\n"
-                f"Tax type: {tax_type}\n"
-                f"Jurisdiction: {jurisdiction}\n"
-                f"Research question: {research_context}\n"
-                f"Time period: {time_period}. {recency_hint}\n\n"
-                f"Rules:\n"
-                f"- Queries must be specific to the exact jurisdiction (include state/province if given)\n"
-                f"- Include a year (2025 or 2026) in at least one query\n"
-                f"- Address the research question directly — do not generate generic category queries\n"
-                f"- Prefer queries likely to surface official government or tax authority pages\n\n"
-                f"Example for 'What is the sales tax rate on grocery items in New York?':\n"
-                f'["New York grocery items sales tax rate exemption 2026 official", '
-                f'"New York sales tax food items SUT rate latest"]\n\n'
-                f"Return ONLY a JSON array of exactly 2 query strings, nothing else."
-            ),
-        }],
+    prompt = (
+        f"Generate exactly 2 highly specific web search queries for this tax research task.\n\n"
+        f"Tax type: {tax_type}\n"
+        f"Jurisdiction: {jurisdiction}\n"
+        f"Research question: {research_context}\n"
+        f"Time period: {time_period}. {recency_hint}\n\n"
+        f"Rules:\n"
+        f"- Queries must be specific to the exact jurisdiction (include state/province if given)\n"
+        f"- Include a year (2025 or 2026) in at least one query\n"
+        f"- Address the research question directly — do not generate generic category queries\n"
+        f"- Prefer queries likely to surface official government or tax authority pages\n\n"
+        f"Example for 'What is the sales tax rate on grocery items in New York?':\n"
+        f'["New York grocery items sales tax rate exemption 2026 official", '
+        f'"New York sales tax food items SUT rate latest"]\n\n'
+        f"Return ONLY a JSON array of exactly 2 query strings, nothing else."
     )
-    for block in response.content:
-        if hasattr(block, "text") and block.text:
-            match = re.search(r"\[.*?\]", block.text, re.DOTALL)
-            if match:
-                try:
-                    queries = json.loads(match.group())
-                    if isinstance(queries, list) and queries:
-                        return queries[:2]
-                except json.JSONDecodeError:
-                    pass
-    # fallback
+
+    response_text = get_completion(prompt, max_tokens=512)
+    match = re.search(r"\[.*?\]", response_text, re.DOTALL)
+    if match:
+        try:
+            queries = json.loads(match.group())
+            if isinstance(queries, list) and queries:
+                return queries[:2]
+        except json.JSONDecodeError:
+            pass
     return [
         f"{tax_type} {jurisdiction} {research_context[:50]} official 2026",
         f"{tax_type} {jurisdiction} rate rules latest",
     ]
 
 
-def _search_single_query(client: Anthropic, query: str) -> list[str]:
-    """
-    Run one search query via Anthropic's web_search tool.
-    Returns a list of URLs extracted from Claude's final response.
-    """
-    messages = [{
-        "role": "user",
-        "content": (
-            f"Search the web for: {query}\n"
-            f"Find official or authoritative tax/government sources. "
-            f"List the URLs of the most relevant results you find."
-        ),
-    }]
-
-    found_urls: list[str] = []
-
-    for _ in range(8):
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2048,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            messages=messages,
-        )
-
-        for block in response.content:
-            text = getattr(block, "text", None)
-            if text:
-                urls = re.findall(r"https?://[^\s\"'<>)\]]+", text)
-                found_urls.extend(urls)
-
-        messages.append({"role": "assistant", "content": response.content})
-
-        if response.stop_reason == "end_turn":
-            break
-
-        if response.stop_reason == "tool_use":
-            tool_results = [
-                {"type": "tool_result", "tool_use_id": block.id, "content": ""}
-                for block in response.content
-                if getattr(block, "type", None) == "tool_use"
-            ]
-            if tool_results:
-                messages.append({"role": "user", "content": tool_results})
-
-    return found_urls
-
-
 def _collect_urls_via_search(queries: list[str], max_sources: int = 2) -> list[str]:
     """Run up to 2 search queries, taking the top 1 URL per query. Returns deduplicated list."""
-    client = Anthropic()
     seen: set[str] = set()
     unique: list[str] = []
 
-    for query in queries[:2]:  # hard cap at 2 queries
+    for query in queries[:2]:
         try:
-            urls = _search_single_query(client, query)
+            urls = search_web(query)
             if urls:
-                top = urls[0]  # take only the first URL per query
+                top = urls[0]
                 if top not in seen:
                     seen.add(top)
                     unique.append(top)
@@ -224,38 +167,29 @@ def _synthesise(
     fetched_chunks: list[str],
     sources_used: list[str],
 ) -> dict:
-    """Send all fetched content to Claude and return structured synthesis."""
-    client = Anthropic()
+    """Send all fetched content to the active model and return structured synthesis."""
     combined = "\n\n".join(fetched_chunks)
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2000,
-        system=SYNTHESIS_SYSTEM,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Tax type: {tax_type}\n"
-                f"Jurisdiction: {jurisdiction}\n"
-                f"Research question: {research_context}\n\n"
-                f"IMPORTANT: In the 'direct_answer' field, answer the research question above "
-                f"directly and specifically using the sources below. Cite exact rates, dates, "
-                f"or rules. Write 'Not found in sources' if the answer is not present.\n\n"
-                f"Then also extract: key findings, recent changes, current rates or rules, "
-                f"important deadlines, conflicting information, and a 3-sentence executive summary.\n\n"
-                f"{combined}"
-            ),
-        }],
-        output_config={
-            "effort": "low",
-            "format": {"type": "json_schema", "schema": SYNTHESIS_SCHEMA},
-        },
+    prompt = (
+        f"Tax type: {tax_type}\n"
+        f"Jurisdiction: {jurisdiction}\n"
+        f"Research question: {research_context}\n\n"
+        f"IMPORTANT: In the 'direct_answer' field, answer the research question above "
+        f"directly and specifically using the sources below. Cite exact rates, dates, "
+        f"or rules. Write 'Not found in sources' if the answer is not present.\n\n"
+        f"Then also extract: key findings, recent changes, current rates or rules, "
+        f"important deadlines, conflicting information, and a 3-sentence executive summary.\n\n"
+        f"{combined}"
     )
-    for block in response.content:
-        if getattr(block, "type", None) == "text":
-            result = json.loads(block.text)
-            result["sources_used"] = sources_used
-            return result
-    raise RuntimeError("No text block in synthesis response")
+    result_text = get_completion(
+        prompt,
+        system_prompt=SYNTHESIS_SYSTEM,
+        schema=SYNTHESIS_SCHEMA,
+        max_tokens=2000,
+        effort="low",
+    )
+    result = json.loads(result_text)
+    result["sources_used"] = sources_used
+    return result
 
 
 def research_topic(

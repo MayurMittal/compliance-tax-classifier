@@ -242,12 +242,46 @@ User inputs: tax_type + jurisdiction (free text) + research_context + time_perio
 
 ---
 
+## Environment Switching — Test vs Production
+
+The app supports two environments selectable from the Streamlit sidebar:
+
+| | Test | Production |
+|---|---|---|
+| **Model** | Google Gemini 1.5 Flash | Claude Sonnet 4.6 |
+| **SDK** | `google-generativeai` | `anthropic` |
+| **Web search** | Disabled (falls back to curated sources) | Enabled (`web_search_20250305`) |
+| **Cost** | Lower | Higher |
+| **Badge colour** | Green | Blue |
+
+The active environment is shown as a colour badge in the sidebar and as a "Classified by:" / "Model:" line on every result. The sidebar toggle overrides the `.env` setting for the session — no redeployment needed.
+
+### How it works
+
+All model calls route through `model_config.py`. The three agent files (`classifier.py`, `agent.py`, `sourcing_agent.py`) call `get_completion()` and `search_web()` and never import an SDK directly:
+
+```
+Streamlit sidebar toggle
+        │  set_environment("test" | "prod")
+        ▼
+  model_config.py
+  ├── get_completion(prompt, schema, ...)
+  │     ├── test  → google.generativeai  (Gemini 1.5 Flash)
+  │     └── prod  → anthropic SDK        (Claude Sonnet 4.6)
+  └── search_web(query)
+        ├── test  → returns []  (sourcing agent falls back to curated sources)
+        └── prod  → Anthropic web_search_20250305 agentic loop
+```
+
+---
+
 ## Setup
 
 ### Prerequisites
 
 - Python 3.9+
 - An [Anthropic API key](https://console.anthropic.com/settings/keys)
+- A [Google AI Studio API key](https://aistudio.google.com/app/apikey) (for Test / Gemini mode)
 
 ### 1. Clone the repository
 
@@ -262,15 +296,32 @@ cd compliance-tax-classifier
 pip install -r requirements.txt
 ```
 
-### 3. Configure your API key
+### 3. Configure API keys
 
 Create a `.env` file in the project root:
 
 ```
 ANTHROPIC_API_KEY=sk-ant-your-key-here
+GOOGLE_API_KEY=your-google-key-here
+ENVIRONMENT=test
 ```
 
+Set `ENVIRONMENT=test` to default to Gemini Flash on startup, or `ENVIRONMENT=prod` to default to Claude Sonnet 4.6. The sidebar toggle overrides this per session.
+
 > The `.env` file is listed in `.gitignore` and will never be committed.
+
+### Streamlit Cloud deployment
+
+Add both keys as Streamlit secrets:
+
+```toml
+# .streamlit/secrets.toml
+ANTHROPIC_API_KEY = "sk-ant-..."
+GOOGLE_API_KEY = "AIza..."
+ENVIRONMENT = "prod"
+```
+
+Users can switch environments via the sidebar without redeploying.
 
 ---
 
