@@ -1,6 +1,9 @@
 # Tax & Compliance Classifier
 
-An AI-powered tool that reads any webpage or text and instantly identifies the type of tax or compliance content it contains — VAT, GST, Sales Tax, Customs Duty, Income Tax, and more.
+An AI-powered tool that reads any webpage, text, or file and does two things automatically:
+
+1. **Classifies** the content across 13 tax/compliance categories with jurisdiction detection and confidence scoring
+2. **Researches** the relevant rules, recent changes, deadlines, and penalties by fetching live data from curated official sources
 
 Built with [Claude Sonnet 4.6](https://www.anthropic.com/claude) and [Streamlit](https://streamlit.io/).
 
@@ -8,16 +11,33 @@ Built with [Claude Sonnet 4.6](https://www.anthropic.com/claude) and [Streamlit]
 
 ## What It Does
 
-Given a URL, pasted text, or an uploaded file, the classifier:
+### Step 1 — Tax & Compliance Classification
 
-1. Fetches and cleans the content (strips navigation, scripts, footers)
-2. Sends it to Claude Sonnet 4.6 with structured JSON output enforced
-3. Returns a structured classification with:
-   - **Primary label** — the dominant tax/compliance category
-   - **Secondary labels** — any additional categories also present
-   - **Jurisdiction** — country or regulatory body, if detectable
-   - **Confidence** — `high`, `medium`, or `low`
-   - **Summary** — one-sentence explanation of the classification
+Given any input (URL, pasted text, or uploaded file), the classifier:
+
+- Fetches and cleans the content (strips scripts, navigation, footers)
+- Sends it to Claude Sonnet 4.6 with a structured JSON schema enforced
+- Returns a classification with:
+  - **Primary label** — the dominant tax/compliance category (e.g. GST, VAT, SALES_TAX)
+  - **Secondary labels** — any additional categories also present
+  - **Jurisdiction** — country or regulatory body, if detectable (e.g. India, United Kingdom)
+  - **Confidence** — `high`, `medium`, or `low`
+  - **Summary** — one-sentence explanation of the classification
+
+### Step 2 — Compliance Research Agent
+
+Immediately after classification, the app automatically:
+
+- Looks up the matched tax type and jurisdiction in `sources_config.json`
+- Fetches live content from each configured trusted URL using `httpx` + `BeautifulSoup`
+- Sends the combined content to Claude Sonnet 4.6 and extracts:
+  - **Current rates** — specific percentages and thresholds
+  - **Recent changes** — rule updates from the last 90 days
+  - **Key deadlines** — filing dates, registration thresholds
+  - **Penalties** — consequences for non-compliance
+- Displays results in an expandable **"Relevant Rules & Recent Changes"** panel with clickable source links
+
+If no sources are configured for a given tax type or jurisdiction, a friendly message prompts you to add them in `sources_config.json`.
 
 ---
 
@@ -45,11 +65,99 @@ Given a URL, pasted text, or an uploaded file, the classifier:
 
 ```
 compliance-tax-classifier/
-├── classifier.py      # Core classification logic + CLI
-├── app.py             # Streamlit web UI
-├── requirements.txt   # Python dependencies
-└── .env               # API key (not committed — see setup)
+├── classifier.py        # Core classification logic + CLI
+├── agent.py             # Compliance research agent
+├── app.py               # Streamlit web UI
+├── sources_config.json  # Trusted source URLs by tax type and jurisdiction
+├── requirements.txt     # Python dependencies
+└── .env                 # API key (not committed — see setup)
 ```
+
+---
+
+## Architecture — Agent Flow
+
+```
+Input (URL / pasted text / uploaded file)
+              │
+              ▼
+    ┌─────────────────────┐
+    │   Content Fetcher   │  httpx GET → BeautifulSoup (strip tags)
+    └─────────────────────┘
+              │
+              ▼
+    ┌─────────────────────────────────┐
+    │   Step 1: Classifier            │
+    │   Claude Sonnet 4.6             │
+    │   Structured JSON output        │
+    │   → primary_label               │
+    │   → jurisdiction                │
+    │   → confidence, summary         │
+    └─────────────────────────────────┘
+              │
+              │  primary_label + jurisdiction
+              ▼
+    ┌─────────────────────────────────┐
+    │   sources_config.json lookup    │
+    │   {"GST": {"India": [url1,...]}}│
+    └─────────────────────────────────┘
+              │
+              │  trusted URLs
+              ▼
+    ┌─────────────────────────────────┐
+    │   Step 2: Research Agent        │
+    │   Fetch each URL (httpx + BS4)  │
+    │   Claude Sonnet 4.6             │
+    │   Structured JSON output        │
+    │   → current_rates               │
+    │   → recent_changes (90 days)    │
+    │   → key_deadlines               │
+    │   → penalties                   │
+    └─────────────────────────────────┘
+              │
+              ▼
+    Streamlit UI — Classification badge
+                 + Expandable research panel
+```
+
+---
+
+## Configuring Trusted Sources
+
+`sources_config.json` maps tax categories to jurisdictions and their official source URLs:
+
+```json
+{
+  "GST": {
+    "India": [
+      "https://www.gst.gov.in/",
+      "https://cbic-gst.gov.in/gst-goods-services-rates.html"
+    ]
+  },
+  "VAT": {
+    "United Kingdom": [
+      "https://www.gov.uk/vat-rates",
+      "https://www.gov.uk/guidance/vat-registration-thresholds"
+    ]
+  }
+}
+```
+
+- The top-level key must match a label from the taxonomy above (e.g. `GST`, `VAT`, `SALES_TAX`)
+- The second-level key must match the jurisdiction string returned by the classifier (e.g. `India`, `United Kingdom`, `United States`)
+- Add as many URLs per jurisdiction as needed — all are fetched and combined before analysis
+
+**Pre-configured sources:**
+
+| Tax Type | Jurisdiction | Sources |
+|---|---|---|
+| `GST` | India | gst.gov.in, cbic-gst.gov.in |
+| `VAT` | European Union | taxation-customs.ec.europa.eu |
+| `VAT` | United Kingdom | gov.uk/vat-rates, gov.uk/vat-registration-thresholds |
+| `SALES_TAX` | United States | irs.gov |
+| `INCOME_TAX` | India | incometax.gov.in, incometaxindia.gov.in |
+| `INCOME_TAX` | United States | irs.gov (business taxes + inflation adjustments) |
+| `COMPLIANCE_NOTICE` | India | incometax.gov.in, gst.gov.in |
 
 ---
 
@@ -103,11 +211,13 @@ The UI offers three input modes:
 | **Web page URL** | Enter a URL — the app fetches and parses the page automatically |
 | **Upload file** | Upload a `.txt` or `.html` file from your computer |
 
-Click **Classify** to run the analysis. Results appear below the button with color-coded labels.
+Click **Classify** to run both the classification and the research agent. Results appear in two sections:
+- A color-coded classification badge with confidence and jurisdiction
+- An expandable **"Relevant Rules & Recent Changes"** panel with live data from official sources
 
 ---
 
-### Command Line
+### Command Line (Classifier only)
 
 ```bash
 # Classify a URL
@@ -131,50 +241,12 @@ python classifier.py "GST registration requirements for e-commerce sellers in In
 
 ---
 
-## How It Works
-
-### Architecture
-
-```
-Input (URL / text / file)
-         │
-         ▼
-  app.py or classifier.py
-         │
-         ├─ URL  → httpx GET → BeautifulSoup (strip tags) → clean text
-         ├─ File → read + BeautifulSoup if HTML → clean text
-         └─ Text → use as-is
-                │
-                ▼
-       Claude Sonnet 4.6
-       output_config: JSON schema (structured output)
-       effort: high
-                │
-                ▼
-       ClassificationResult
-         primary_label, secondary_labels,
-         jurisdiction, confidence, summary
-```
-
-### Model & Configuration
-
-| Setting | Value |
-|---|---|
-| Model | `claude-sonnet-4-6` |
-| Effort | `high` (maximum for Sonnet) |
-| Output | Structured JSON schema — enforces valid labels every time |
-| Max content | 10,000 characters (truncated after stripping HTML) |
-
-Structured output (`output_config.format`) is used instead of prompt-only JSON extraction to guarantee that labels always match the taxonomy and the response is always machine-parseable — no regex or fallback parsing needed.
-
----
-
 ## Dependencies
 
 | Package | Purpose |
 |---|---|
 | `anthropic` | Official Anthropic Python SDK |
-| `httpx` | Async-capable HTTP client for fetching URLs |
+| `httpx` | HTTP client for fetching URLs (classifier + agent) |
 | `beautifulsoup4` | HTML parsing and tag stripping |
 | `python-dotenv` | Loads `ANTHROPIC_API_KEY` from `.env` |
 | `streamlit` | Web UI framework |
@@ -198,12 +270,13 @@ pip install -r requirements.txt
 | Python language Wikipedia page | `NOT_TAX_RELATED` | — | high |
 
 ---
+
 ## Application Screenshots
+
 <img width="1577" height="839" alt="image" src="https://github.com/user-attachments/assets/6d5da962-4529-48dc-b15e-09381b25bcc7" />
 <img width="1513" height="1027" alt="image" src="https://github.com/user-attachments/assets/3f20e1c3-f85f-454e-b02b-b4dd31ec811b" />
 
-
-
+---
 
 ## License
 
