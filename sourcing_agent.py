@@ -9,6 +9,10 @@ SOURCES_CONFIG_PATH = Path(__file__).parent / "sources_config.json"
 SYNTHESIS_SCHEMA = {
     "type": "object",
     "properties": {
+        "direct_answer": {
+            "type": "string",
+            "description": "Direct, specific answer to the user's research question. Cite exact rates, dates, or rules from the sources. 'Not found in sources' if not mentioned.",
+        },
         "key_findings": {
             "type": "array",
             "items": {"type": "string"},
@@ -17,7 +21,7 @@ SYNTHESIS_SCHEMA = {
         "recent_changes": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Rule changes or updates from the last 90 days explicitly mentioned. Empty if none found.",
+            "description": "Rule changes or updates explicitly mentioned in the sources. Empty if none found.",
         },
         "current_rates_or_rules": {
             "type": "string",
@@ -44,7 +48,7 @@ SYNTHESIS_SCHEMA = {
         },
     },
     "required": [
-        "key_findings", "recent_changes", "current_rates_or_rules",
+        "direct_answer", "key_findings", "recent_changes", "current_rates_or_rules",
         "important_deadlines", "conflicting_information", "sources_used", "summary",
     ],
     "additionalProperties": False,
@@ -65,7 +69,7 @@ def _load_sources() -> dict:
 
 
 def get_all_jurisdictions() -> list[str]:
-    """Return sorted unique list of all jurisdictions in sources_config.json."""
+    """Return sorted unique list of all jurisdictions across sources_config.json."""
     sources = _load_sources()
     jurs: set[str] = set()
     for tax_data in sources.values():
@@ -73,8 +77,23 @@ def get_all_jurisdictions() -> list[str]:
     return sorted(jurs)
 
 
-def _generate_queries(topic: str, jurisdiction: str) -> list[str]:
-    """Ask Claude to produce 3-5 targeted search queries for the topic."""
+def get_all_tax_types() -> list[str]:
+    """Return sorted list of tax type keys from sources_config.json."""
+    sources = _load_sources()
+    return sorted(sources.keys())
+
+
+def _generate_queries(
+    tax_type: str, jurisdiction: str, research_context: str, time_period: str
+) -> list[str]:
+    """Ask Claude to produce exactly 2 highly specific search queries."""
+    recency_hint = {
+        "Last 7 days": "Queries must target very recent news. Include the current month and year (e.g. 'June 2026').",
+        "Last 30 days": "Queries should target recent updates. Include '2026' in each query.",
+        "Last 90 days": "Queries should target recent changes. Include '2025' or '2026'.",
+        "Any time": "",
+    }.get(time_period, "")
+
     client = Anthropic()
     response = client.messages.create(
         model="claude-sonnet-4-6",
@@ -82,13 +101,20 @@ def _generate_queries(topic: str, jurisdiction: str) -> list[str]:
         messages=[{
             "role": "user",
             "content": (
-                f"Generate 3 to 5 focused web search queries for researching this tax/compliance topic.\n"
-                f"Topic: {topic}\n"
-                f"Jurisdiction: {jurisdiction}\n\n"
-                f"Return ONLY a JSON array of query strings, nothing else.\n"
-                f"Prefer queries that target official government sites, tax authority publications, "
-                f"or authoritative legal references.\n"
-                f"Example: [\"India GST rate 2025 official\", \"CBIC GST recent amendments\"]"
+                f"Generate exactly 2 highly specific web search queries for this tax research task.\n\n"
+                f"Tax type: {tax_type}\n"
+                f"Jurisdiction: {jurisdiction}\n"
+                f"Research question: {research_context}\n"
+                f"Time period: {time_period}. {recency_hint}\n\n"
+                f"Rules:\n"
+                f"- Queries must be specific to the exact jurisdiction (include state/province if given)\n"
+                f"- Include a year (2025 or 2026) in at least one query\n"
+                f"- Address the research question directly — do not generate generic category queries\n"
+                f"- Prefer queries likely to surface official government or tax authority pages\n\n"
+                f"Example for 'What is the sales tax rate on grocery items in New York?':\n"
+                f'["New York grocery items sales tax rate exemption 2026 official", '
+                f'"New York sales tax food items SUT rate latest"]\n\n'
+                f"Return ONLY a JSON array of exactly 2 query strings, nothing else."
             ),
         }],
     )
@@ -99,14 +125,13 @@ def _generate_queries(topic: str, jurisdiction: str) -> list[str]:
                 try:
                     queries = json.loads(match.group())
                     if isinstance(queries, list) and queries:
-                        return queries[:5]
+                        return queries[:2]
                 except json.JSONDecodeError:
                     pass
-    # fallback queries if Claude response can't be parsed
+    # fallback
     return [
-        f"{topic} {jurisdiction} official",
-        f"{topic} {jurisdiction} tax authority rules",
-        f"{topic} {jurisdiction} recent changes 2025",
+        f"{tax_type} {jurisdiction} {research_context[:50]} official 2026",
+        f"{tax_type} {jurisdiction} rate rules latest",
     ]
 
 
@@ -134,7 +159,6 @@ def _search_single_query(client: Anthropic, query: str) -> list[str]:
             messages=messages,
         )
 
-        # Extract URLs from any text blocks in this response
         for block in response.content:
             text = getattr(block, "text", None)
             if text:
@@ -147,7 +171,6 @@ def _search_single_query(client: Anthropic, query: str) -> list[str]:
             break
 
         if response.stop_reason == "tool_use":
-            # Acknowledge each tool_use block so the loop can continue
             tool_results = [
                 {"type": "tool_result", "tool_use_id": block.id, "content": ""}
                 for block in response.content
@@ -159,23 +182,24 @@ def _search_single_query(client: Anthropic, query: str) -> list[str]:
     return found_urls
 
 
-def _collect_urls_via_search(queries: list[str]) -> list[str]:
-    """Run all search queries. Returns deduplicated list of URLs."""
+def _collect_urls_via_search(queries: list[str], max_sources: int = 2) -> list[str]:
+    """Run up to 2 search queries, taking the top 1 URL per query. Returns deduplicated list."""
     client = Anthropic()
-    all_urls: list[str] = []
-    for query in queries:
-        try:
-            all_urls.extend(_search_single_query(client, query))
-        except Exception:
-            continue
-    # deduplicate, preserve order, cap at 10
     seen: set[str] = set()
     unique: list[str] = []
-    for url in all_urls:
-        if url not in seen:
-            seen.add(url)
-            unique.append(url)
-    return unique[:10]
+
+    for query in queries[:2]:  # hard cap at 2 queries
+        try:
+            urls = _search_single_query(client, query)
+            if urls:
+                top = urls[0]  # take only the first URL per query
+                if top not in seen:
+                    seen.add(top)
+                    unique.append(top)
+        except Exception:
+            continue
+
+    return unique[:max_sources]
 
 
 def _fallback_urls(jurisdiction: str) -> list[str]:
@@ -193,31 +217,36 @@ def _fallback_urls(jurisdiction: str) -> list[str]:
     return urls
 
 
-def _synthesise(topic: str, jurisdiction: str, fetched_chunks: list[str], sources_used: list[str]) -> dict:
+def _synthesise(
+    tax_type: str,
+    jurisdiction: str,
+    research_context: str,
+    fetched_chunks: list[str],
+    sources_used: list[str],
+) -> dict:
     """Send all fetched content to Claude and return structured synthesis."""
     client = Anthropic()
     combined = "\n\n".join(fetched_chunks)
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=3000,
+        max_tokens=2000,
         system=SYNTHESIS_SYSTEM,
         messages=[{
             "role": "user",
             "content": (
-                f"Research topic: {topic}\n"
-                f"Jurisdiction: {jurisdiction}\n\n"
-                f"Synthesise the following sources and extract:\n"
-                f"- key findings and rules\n"
-                f"- recent changes in the last 90 days (only if explicitly mentioned)\n"
-                f"- current rates or rules with specific figures\n"
-                f"- important deadlines\n"
-                f"- any conflicting information across sources\n"
-                f"- a 3-sentence executive summary\n\n"
+                f"Tax type: {tax_type}\n"
+                f"Jurisdiction: {jurisdiction}\n"
+                f"Research question: {research_context}\n\n"
+                f"IMPORTANT: In the 'direct_answer' field, answer the research question above "
+                f"directly and specifically using the sources below. Cite exact rates, dates, "
+                f"or rules. Write 'Not found in sources' if the answer is not present.\n\n"
+                f"Then also extract: key findings, recent changes, current rates or rules, "
+                f"important deadlines, conflicting information, and a 3-sentence executive summary.\n\n"
                 f"{combined}"
             ),
         }],
         output_config={
-            "effort": "high",
+            "effort": "low",
             "format": {"type": "json_schema", "schema": SYNTHESIS_SCHEMA},
         },
     )
@@ -229,21 +258,28 @@ def _synthesise(topic: str, jurisdiction: str, fetched_chunks: list[str], source
     raise RuntimeError("No text block in synthesis response")
 
 
-def research_topic(topic: str, jurisdiction: str) -> dict:
+def research_topic(
+    tax_type: str,
+    jurisdiction: str,
+    research_context: str,
+    time_period: str = "Any time",
+    max_sources: int = 2,
+) -> dict:
     """
     Main entry point for the sourcing agent.
 
     Returns a dict with keys:
-      key_findings, recent_changes, current_rates_or_rules, important_deadlines,
-      conflicting_information, sources_used, summary, used_fallback, no_sources
+      direct_answer, key_findings, recent_changes, current_rates_or_rules,
+      important_deadlines, conflicting_information, sources_used, summary,
+      used_fallback, no_sources
     """
-    # Step 1: Generate search queries
-    queries = _generate_queries(topic, jurisdiction)
+    # Step 1: Generate 2 specific search queries
+    queries = _generate_queries(tax_type, jurisdiction, research_context, time_period)
 
-    # Step 2: Run web search for each query
+    # Step 2: Run web search — max 2 queries, top 1 URL each
     used_fallback = False
     try:
-        candidate_urls = _collect_urls_via_search(queries)
+        candidate_urls = _collect_urls_via_search(queries, max_sources=max_sources)
     except Exception:
         candidate_urls = []
 
@@ -254,6 +290,7 @@ def research_topic(topic: str, jurisdiction: str) -> dict:
 
     if not candidate_urls:
         return {
+            "direct_answer": "No sources available to answer this question.",
             "key_findings": [],
             "recent_changes": [],
             "current_rates_or_rules": "No sources available.",
@@ -261,17 +298,17 @@ def research_topic(topic: str, jurisdiction: str) -> dict:
             "conflicting_information": [],
             "sources_used": [],
             "summary": (
-                f"No sources found for '{topic}' in {jurisdiction}. "
+                f"No sources found for '{tax_type}' in {jurisdiction}. "
                 f"Add URLs to sources_config.json to enable research for this jurisdiction."
             ),
             "used_fallback": False,
             "no_sources": True,
         }
 
-    # Step 4: Fetch and clean content from each URL
+    # Step 4: Fetch and clean content — max 3,000 chars per URL
     fetched_chunks: list[str] = []
     sources_used: list[str] = []
-    for url in candidate_urls:
+    for url in candidate_urls[:max_sources]:
         try:
             text = fetch_text(url, max_chars=3000)
             fetched_chunks.append(f"=== SOURCE: {url} ===\n{text}")
@@ -281,6 +318,7 @@ def research_topic(topic: str, jurisdiction: str) -> dict:
 
     if not fetched_chunks:
         return {
+            "direct_answer": "Sources were found but could not be fetched.",
             "key_findings": [],
             "recent_changes": [],
             "current_rates_or_rules": "Sources found but could not be fetched.",
@@ -293,7 +331,7 @@ def research_topic(topic: str, jurisdiction: str) -> dict:
         }
 
     # Step 5: Synthesise across all fetched documents
-    result = _synthesise(topic, jurisdiction, fetched_chunks, sources_used)
+    result = _synthesise(tax_type, jurisdiction, research_context, fetched_chunks, sources_used)
     result["used_fallback"] = used_fallback
     result["no_sources"] = False
     return result

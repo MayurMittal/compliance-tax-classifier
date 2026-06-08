@@ -1,7 +1,7 @@
 import streamlit as st
 from classifier import classify, fetch_text
 from agent import research_compliance
-from sourcing_agent import research_topic, get_all_jurisdictions
+from sourcing_agent import research_topic, get_all_tax_types
 
 LABEL_COLORS = {
     "VAT": "#4A90D9",
@@ -177,39 +177,63 @@ with tab_classify:
 # ── Tab 2: Research Topic ──────────────────────────────────────────────────────
 with tab_research:
     st.caption(
-        "Enter any tax topic and jurisdiction — the agent will search the web for relevant "
-        "official sources, fetch their content, and synthesise a structured summary."
+        "Select a tax type, enter a jurisdiction, and describe your exact question — "
+        "the agent will search the web, fetch official sources, and synthesise a direct answer."
     )
 
-    jurisdictions = get_all_jurisdictions()
+    tax_types = get_all_tax_types()
 
-    topic_input = st.text_input(
-        "Tax topic",
-        placeholder="e.g. GST rate changes, VAT registration threshold, income tax deadlines",
-    )
-    jurisdiction_input = st.selectbox(
-        "Jurisdiction",
-        options=jurisdictions,
+    tax_type_input = st.selectbox(
+        "Tax type",
+        options=tax_types,
         index=None,
-        placeholder="Select a jurisdiction...",
+        placeholder="Select a tax type...",
+    )
+    jurisdiction_input = st.text_input(
+        "Jurisdiction",
+        placeholder="e.g. New York, United States  |  Maharashtra, India  |  United Kingdom",
+    )
+    research_context_input = st.text_area(
+        "Research context",
+        height=120,
+        placeholder=(
+            "Describe exactly what you want to research. Example: What is the current sales and use "
+            "tax rate on grocery items in New York? Have there been any rate changes in the last 10 days?"
+        ),
+    )
+    time_period_input = st.selectbox(
+        "Time period",
+        options=["Last 7 days", "Last 30 days", "Last 90 days", "Any time"],
+        index=3,
+    )
+
+    st.caption(
+        "**Note:** This feature fetches live web content. Each search uses API credits."
     )
 
     if st.button("Research", type="primary"):
-        if not topic_input.strip():
-            st.error("Please enter a tax topic.")
-        elif not jurisdiction_input:
-            st.error("Please select a jurisdiction.")
+        if not tax_type_input:
+            st.error("Please select a tax type.")
+        elif not jurisdiction_input.strip():
+            st.error("Please enter a jurisdiction.")
+        elif not research_context_input.strip():
+            st.error("Please describe what you want to research.")
         else:
             with st.spinner("Generating search queries and fetching sources — this may take a moment..."):
                 try:
-                    report = research_topic(topic_input.strip(), jurisdiction_input)
+                    report = research_topic(
+                        tax_type_input,
+                        jurisdiction_input.strip(),
+                        research_context_input.strip(),
+                        time_period_input,
+                    )
                 except Exception as exc:
                     st.error(f"Research failed: {exc}")
                     st.stop()
 
             st.divider()
-            st.subheader(f"Research Report: {topic_input}")
-            st.caption(f"Jurisdiction: {jurisdiction_input}")
+            st.subheader(f"Research Report: {tax_type_input}")
+            st.caption(f"Jurisdiction: {jurisdiction_input}  |  Period: {time_period_input}")
 
             if report.get("no_sources"):
                 st.info(report.get("summary", "No sources found or could not be fetched."))
@@ -219,6 +243,10 @@ with tab_research:
                         "Web search returned no results — results below are from curated sources "
                         "in `sources_config.json`."
                     )
+
+                if report.get("direct_answer"):
+                    st.markdown("**Direct Answer**")
+                    st.success(report["direct_answer"])
 
                 if report.get("summary"):
                     st.info(report["summary"])
@@ -233,7 +261,7 @@ with tab_research:
                         st.markdown(f"- {item}")
 
                 if report.get("recent_changes"):
-                    st.markdown("**Recent Changes (last 90 days)**")
+                    st.markdown("**Recent Changes**")
                     for item in report["recent_changes"]:
                         st.markdown(f"- {item}")
 

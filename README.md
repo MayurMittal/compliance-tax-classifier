@@ -41,20 +41,34 @@ If no sources are configured for a given tax type or jurisdiction, a friendly me
 
 ### Research Topic (Tab 2) — Multi-Document Sourcing Agent
 
-A free-form research tool. You provide a tax topic (e.g. "GST rate changes") and a jurisdiction:
+A context-aware research tool. You provide four inputs:
 
-1. **Query generation** — Claude generates 3–5 targeted search queries for the topic
-2. **Web search** — each query is run via Anthropic's `web_search_20250305` server-side tool to collect result URLs
-3. **Content fetching** — each URL is fetched and cleaned with `httpx` + `BeautifulSoup`
+| Input | Description |
+|---|---|
+| **Tax type** | Dropdown populated from `sources_config.json` categories (e.g. SALES_TAX, GST) |
+| **Jurisdiction** | Free text — supports state/province-level specificity (e.g. "New York, United States" or "Maharashtra, India") |
+| **Research context** | Describe your exact question — e.g. "What is the current sales and use tax rate on grocery items in New York? Have there been any rate changes in the last 10 days?" |
+| **Time period** | Last 7 days / Last 30 days / Last 90 days / Any time — filters search query recency |
+
+The agent then:
+
+1. **Query generation** — Claude generates exactly 2 highly specific search queries using all four inputs (e.g. `"New York grocery items sales tax rate exemption 2026 official"`)
+2. **Web search** — each query is run via Anthropic's `web_search_20250305` server-side tool, taking the top 1 result URL per query (max 2 URLs total)
+3. **Content fetching** — each URL is fetched and cleaned with `httpx` + `BeautifulSoup` (max 3,000 chars per URL)
 4. **Synthesis** — all documents are sent to Claude Sonnet 4.6, which returns a structured report with:
+   - **Direct Answer** — a specific, source-cited answer to your exact research question, shown first
    - **Key findings** — main facts and rules across all sources
-   - **Recent changes** — rule updates from the last 90 days (only where explicitly mentioned)
+   - **Recent changes** — rule updates explicitly mentioned in sources
    - **Current rates or rules** — specific percentages and thresholds
    - **Important deadlines** — filing dates and registration thresholds
    - **Conflicting information** — contradictions across sources, if any
    - **Sources used** — clickable links to every source consulted
 
 If web search returns no results, the agent automatically falls back to the curated URLs in `sources_config.json` for that jurisdiction.
+
+**Example query:** Tax type `SALES_TAX` · Jurisdiction `New York, United States` · Research context: _"What is the current sales and use tax rate on grocery items in New York? Have there been any rate changes in the last 10 days?"_ · Time period: `Last 7 days`
+
+> The agent generates queries like `"New York grocery items sales tax rate 2026 exemption official"` and `"New York SUT food items tax rate latest update"`, fetches the top result from each, and synthesises a direct answer citing the exact rate and any recent exemption changes.
 
 ---
 
@@ -143,43 +157,47 @@ Input (URL / pasted text / uploaded file)
 ## Architecture — Research Topic Flow
 
 ```
-User inputs: topic + jurisdiction
+User inputs: tax_type + jurisdiction (free text) + research_context + time_period
               │
               ▼
     ┌─────────────────────────────────┐
     │   Query Generation              │
     │   Claude Sonnet 4.6             │
-    │   → 3–5 targeted search queries │
+    │   → exactly 2 specific queries  │
+    │     (jurisdiction + year aware) │
     └─────────────────────────────────┘
               │
               ▼
     ┌─────────────────────────────────┐
     │   Web Search (agentic loop)     │
     │   Anthropic web_search tool     │
-    │   → collect result URLs         │
+    │   → top 1 URL per query         │
+    │   → max 2 URLs total            │
     └─────────────────────────────────┘
               │  (fallback: sources_config.json)
               ▼
     ┌─────────────────────────────────┐
     │   Content Fetcher               │
     │   httpx GET → BeautifulSoup     │
-    │   → clean text per URL          │
+    │   → max 3,000 chars per URL     │
     └─────────────────────────────────┘
               │
               ▼
     ┌─────────────────────────────────┐
     │   Multi-Document Synthesis      │
-    │   Claude Sonnet 4.6             │
+    │   Claude Sonnet 4.6 (effort=low)│
     │   Structured JSON output        │
+    │   → direct_answer (shown first) │
     │   → key_findings                │
-    │   → recent_changes (90 days)    │
+    │   → recent_changes              │
     │   → current_rates_or_rules      │
     │   → important_deadlines         │
     │   → conflicting_information     │
     └─────────────────────────────────┘
               │
               ▼
-    Streamlit UI — Research report
+    Streamlit UI — Direct Answer (green box)
+                 + Full research report
                  + Clickable source links
 ```
 
@@ -284,7 +302,7 @@ Choose an input mode (paste text / URL / upload file) and click **Classify**. Re
 
 **Tab 2 — Research Topic**
 
-Enter a free-form tax topic and select a jurisdiction from the dropdown, then click **Research**. The agent searches the web, fetches sources, and displays a structured report with key findings, recent changes, rates, deadlines, and conflicting information across sources.
+Select a tax type, enter a jurisdiction (supports state/province level, e.g. "New York, United States"), describe your exact research question, and choose a time period, then click **Research**. The agent generates two highly specific search queries, fetches the top result from each, and returns a structured report with a **Direct Answer** to your exact question followed by key findings, recent changes, rates, deadlines, and conflicting information across sources.
 
 ---
 
